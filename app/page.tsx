@@ -1,7 +1,5 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import BookTrailerStudio from '../openart_clone';
-
-export default function Page() {
-  return <BookTrailerStudio />;
+export default function HomePage() {
+  redirect('/create');
 }
