@@ -40,6 +40,7 @@ AI-powered book trailer generator for TikTok, YouTube Shorts, and Instagram Reel
 
 ### Prerequisites
 - Node.js 16+ and npm
+- FFmpeg + FFprobe installed locally
 - Replicate API account
 - Supabase account (free tier works!)
 
@@ -67,7 +68,8 @@ Edit `.env.local` and add your API keys:
 
 4. **Set up Supabase database**
 - Go to your Supabase project → SQL Editor
-- Run the schema from `supabase-schema.sql`
+- Run the schema from `supabase/schema.sql`
+- Create Supabase Storage buckets named `study` and `renders`
 
 5. **Run development server**
 ```bash
@@ -100,6 +102,8 @@ npm start
 REPLICATE_API_TOKEN=your_key
 SUPABASE_URL=your_url
 SUPABASE_SERVICE_ROLE_KEY=your_key
+NEXT_PUBLIC_SUPABASE_URL=your_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_key
 ```
 
 ## 💰 Pricing
@@ -124,35 +128,57 @@ SUPABASE_SERVICE_ROLE_KEY=your_key
 ## 🛠️ Project Structure
 
 ```
-booktok-trailer-studio/
-├── api/
-│   └── generate.js          # Backend API for AI generation
-├── src/
-│   └── App.js              # Main React component
+Claude-Video-Gen-Tool/
+├── app/                    # Next.js App Router pages + API routes
+│   ├── create/             # Create UI (Trailer DNA)
+│   ├── study/              # Study mode
+│   ├── templates/          # Template list + detail
+│   ├── renders/            # Job history
+│   └── api/                # Jobs/templates/study endpoints
+├── components/             # UI components
+│   └── create/             # Create mode UI
+├── lib/                    # Supabase clients + validators
+├── supabase/               # Database schema
 ├── public/                 # Static assets
-├── .env.local             # Environment variables (not in git)
-├── .env.example           # Example env file
-├── .gitignore             # Git ignore rules
-├── package.json           # Dependencies
-└── README.md              # This file
+└── README.md               # This file
 ```
 
 ## 🔧 Configuration
 
 ### Cinematic Presets
-Presets are defined in `src/App.js`:
-- HBO Gothic Cinematic
-- Cinematic Blockbuster
-- Film Noir
-- Motion Chapters Style
-- Horror Gothic
-- Romantic Dreamy
+Presets are defined in `components/create/BookTrailerStudio.tsx` for the Create Mode UI.
 
-### AI Model Configuration
-Models are configured in `api/generate.js`:
-- Stable Diffusion XL for images
-- Stable Video Diffusion for video
-- Bark AI for voice narration
+### API Routes
+App Router endpoints live in `app/api/*`:
+- `/api/jobs` for job creation + listing
+- `/api/jobs/remix` for beat-level remix renders
+- `/api/templates` for template list + detail
+- `/api/study` for study runs
+- `/api/study/upload-url` for signed uploads to Supabase Storage
+ - `/api/templates/:id/test` for Fit Score previews
+
+### Supabase Schema
+Run the SQL in `supabase/schema.sql` to provision tables for templates, jobs, and study runs.
+
+### Study Mode Upload Flow
+1. Request a signed upload URL from `/api/study/upload-url`.
+2. Upload the reference video directly to the `study` storage bucket.
+3. Call `/api/study` with the returned `storage_path` to run FFmpeg DNA extraction.
+
+### Deterministic Rendering
+`/api/jobs` generates a TimelinePlan and uses FFmpeg to render a text-card MP4 into the `renders` bucket.
+
+### Template Builder + Versioning
+Template Builder lives at `/templates/[templateId]` with controls for beats, pacing, cut density, transitions, text rules, and defaults. Published versions are immutable; saving edits on a published template creates a new draft version.
+
+### Template Fit Score
+`/api/templates/:id/test` renders a preview video and returns a Fit Score with breakdown, alerts, and recommendations to refine templates.
+
+### Remix Workflow
+Completed renders expose beat-level remix controls. Remix requests POST to `/api/jobs/remix` and create a new job linked to the parent job.
+
+### Signed URL Handling
+Video and preview outputs are stored as storage paths (`video_path`, `preview_path`) and signed URLs are generated on demand by API responses to ensure playback works after refresh.
 
 ## 📊 Features Roadmap
 

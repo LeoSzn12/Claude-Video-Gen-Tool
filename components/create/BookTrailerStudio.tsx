@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Sparkles, BookOpen, Zap, Crown, Film, Layout, Hash, Video, Plus, Trash2, Copy, Play, Download, Share2, Clock, CheckCircle2, Camera, Lightbulb, Target, Mic2, Upload, Settings, Music, User, Image, Wand2, ChevronRight, Eye, Palette, Volume2, FileText, Shuffle, TrendingUp, AlertCircle, BarChart, Repeat, Activity } from 'lucide-react';
 
 interface Scene {
@@ -16,6 +16,7 @@ interface Scene {
 
 interface Video {
   id: string;
+  parentJobId?: string;
   title: string;
   platform: string;
   duration: number;
@@ -27,6 +28,9 @@ interface Video {
   videoUrl?: string;
   characterImageUrl?: string;
   voiceUrl?: string;
+  timelinePlan?: {
+    beats: Array<{ id: string; label: string; duration: number; text: string }>;
+  };
 }
 
 interface Preset {
@@ -50,6 +54,13 @@ const BookTrailerStudio = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
   const [generatedVideos, setGeneratedVideos] = useState<Video[]>([]);
+  const [jobStatus, setJobStatus] = useState<string | null>(null);
+  const [jobProgress, setJobProgress] = useState(0);
+  const [remixSettings, setRemixSettings] = useState({
+    fasterCuts: false,
+    moreText: false,
+    characterFocus: false,
+  });
   
   // Book Info
   const [bookTitle, setBookTitle] = useState('');
@@ -170,6 +181,43 @@ const BookTrailerStudio = () => {
     }
   ];
 
+  const [availablePresets, setAvailablePresets] = useState<Preset[]>(cinematicPresets);
+
+  useEffect(() => {
+    const loadTemplates = async () => {
+      try {
+        const response = await fetch('/api/templates');
+        const data = await response.json();
+        if (!response.ok || !Array.isArray(data.templates)) {
+          return;
+        }
+
+        const mapped = data.templates.map((template: any) => ({
+          id: template.id,
+          name: template.name,
+          type: template.status === 'published' ? 'Template' : 'Draft',
+          desc: template.description ?? 'Template preset',
+          videoModel: template.template_json?.videoModel ?? 'Deterministic Render',
+          imageModel: template.template_json?.imageModel ?? 'Text Cards',
+          prompt: template.template_json?.prompt ?? {
+            scene: 'Template-driven scene beats',
+            visuals: 'Text-forward, cinematic',
+            camera: 'Static frame with typography',
+            audio: 'Minimal ambient tone',
+          },
+        }));
+
+        if (mapped.length > 0) {
+          setAvailablePresets(mapped);
+        }
+      } catch (error) {
+        console.warn('Failed to load templates', error);
+      }
+    };
+
+    loadTemplates();
+  }, []);
+
   const voices = [
     { id: 'bella', name: 'Bella', style: 'Warm Narrator', gender: 'Female', best: 'Romance, YA' },
     { id: 'adam', name: 'Adam', style: 'Deep Dramatic', gender: 'Male', best: 'Thriller, Fantasy' },
@@ -265,55 +313,151 @@ const BookTrailerStudio = () => {
 
   const handleGenerate = async () => {
     if (!bookTitle || !bookSynopsis) return;
-    
+
     setIsGenerating(true);
+    setJobStatus('queued');
+    setJobProgress(0);
     try {
-      const response = await fetch('/api/generate', {
+      const response = await fetch('/api/jobs', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          bookTitle,
-          bookSynopsis,
-          keyQuote,
-          genre: bookGenre,
-          preset: selectedPreset?.id || 'cinematic',
-          characterDescription,
-          sceneDescription,
-          useCharacterLock,
-          videoDuration,
-          platform
+          templateId: selectedPreset?.id,
+          book: {
+            title: bookTitle,
+            author: authorName,
+            synopsis: bookSynopsis,
+            genre: bookGenre,
+            quote: keyQuote,
+          },
+          options: {
+            duration: videoDuration,
+            platform,
+            includeText,
+            includeCaptions,
+          },
+          studyId: undefined,
         }),
       });
 
       const data = await response.json();
 
-      if (data.success) {
-        const newVideo: Video = {
-          id: data.trailer.id,
-          title: bookTitle || 'My Book Trailer',
-          platform: platform,
-          duration: videoDuration,
-          preset: selectedPreset?.name || 'Standard',
-          videoModel: selectedPreset?.videoModel || 'Runway Gen-3',
-          imageModel: selectedPreset?.imageModel || 'DALL-E 3',
-          timestamp: new Date(data.trailer.timestamp).toLocaleString(),
-          hasCharacterLock: useCharacterLock,
-          videoUrl: data.trailer.videoUrl,
-          characterImageUrl: data.trailer.characterImageUrl,
-          voiceUrl: data.trailer.voiceUrl
-        };
-        
-        setGeneratedVideos([newVideo, ...generatedVideos]);
-        generateHashtags();
-        setSelectedTool('my-trailers'); // Switch to view result
-      } else {
-        alert('Failed to generate trailer: ' + data.error);
+      if (!response.ok) {
+        throw new Error(data?.error ?? 'Failed to create job');
       }
+
+      const jobId = data.jobId;
+      setJobStatus(data.status ?? 'running');
+      setJobProgress(data.progress ?? 0);
+
+      const job = await pollJob(jobId);
+
+      const outputs = job.outputs_json ?? {};
+      const newVideo: Video = {
+        id: job.id,
+        title: bookTitle || 'My Book Trailer',
+        platform: platform,
+        duration: videoDuration,
+        preset: selectedPreset?.name || 'Standard',
+        videoModel: selectedPreset?.videoModel || 'Runway Gen-3',
+        imageModel: selectedPreset?.imageModel || 'DALL-E 3',
+        timestamp: new Date(job.created_at).toLocaleString(),
+        hasCharacterLock: useCharacterLock,
+        videoUrl: outputs.video_url ?? outputs.videoUrl,
+        characterImageUrl: outputs.characterImageUrl,
+        voiceUrl: outputs.voiceUrl,
+        timelinePlan: outputs.timeline_plan,
+        parentJobId: job.parent_job_id,
+      };
+
+      setGeneratedVideos([newVideo, ...generatedVideos]);
+      generateHashtags();
+      setSelectedTool('my-trailers');
     } catch (error) {
       console.error('Error:', error);
-      alert('An error occurred while generating the trailer.');
+      const message = error instanceof Error ? error.message : 'An error occurred while generating the trailer.';
+      alert(message);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const pollJob = async (jobId: string) => {
+    let isComplete = false;
+    let latestJob: any = null;
+    while (!isComplete) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const jobResponse = await fetch(`/api/jobs/${jobId}`);
+      const jobData = await jobResponse.json();
+
+      if (!jobResponse.ok) {
+        throw new Error(jobData?.error ?? 'Failed to fetch job');
+      }
+
+      const job = jobData.job;
+      latestJob = job;
+      setJobStatus(job.status);
+      setJobProgress(job.progress ?? 0);
+
+      if (job.status === 'completed') {
+        isComplete = true;
+      } else if (job.status === 'failed') {
+        throw new Error(job.error ?? 'Job failed');
+      }
+    }
+    return latestJob;
+  };
+
+  const handleRemix = async (video: Video, beatId?: string) => {
+    setIsGenerating(true);
+    setJobStatus('remix');
+    setJobProgress(0);
+
+    try {
+      const response = await fetch('/api/jobs/remix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent_job_id: video.id,
+          beat_id: beatId,
+          fasterCuts: remixSettings.fasterCuts,
+          moreText: remixSettings.moreText,
+          characterFocus: remixSettings.characterFocus,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error ?? 'Failed to start remix');
+      }
+
+      const job = await pollJob(data.jobId);
+      const outputs = job.outputs_json ?? {};
+
+      const newVideo: Video = {
+        id: job.id,
+        parentJobId: video.id,
+        title: `${video.title} (Remix)`,
+        platform: video.platform,
+        duration: video.duration,
+        preset: video.preset,
+        videoModel: video.videoModel,
+        imageModel: video.imageModel,
+        timestamp: new Date(job.created_at).toLocaleString(),
+        hasCharacterLock: video.hasCharacterLock,
+        videoUrl: outputs.video_url ?? outputs.videoUrl,
+        characterImageUrl: outputs.characterImageUrl,
+        voiceUrl: outputs.voiceUrl,
+        timelinePlan: outputs.timeline_plan,
+      };
+
+      setGeneratedVideos([newVideo, ...generatedVideos]);
+      setSelectedTool('my-trailers');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to remix';
+      alert(message);
     } finally {
       setIsGenerating(false);
     }
@@ -569,7 +713,7 @@ const BookTrailerStudio = () => {
           <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700">
             <h3 className="text-xl font-semibold mb-4">Cinematic Presets</h3>
             <div className="space-y-2">
-              {cinematicPresets.map((preset: any) => (
+              {availablePresets.map((preset: any) => (
                 <div key={preset.id}>
                   <button
                     onClick={() => handlePresetSelect(preset)}
@@ -685,6 +829,11 @@ const BookTrailerStudio = () => {
               </>
             )}
           </button>
+          {isGenerating && jobStatus && (
+            <div className="mt-3 text-sm text-purple-200">
+              Job status: {jobStatus} • {jobProgress}% complete
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1010,6 +1159,70 @@ const BookTrailerStudio = () => {
                     <Copy className="w-4 h-4" />
                   </button>
                 </div>
+                {video.timelinePlan?.beats && (
+                  <div className="mt-4 rounded-lg border border-gray-700 bg-gray-900/60 p-3 text-xs text-gray-300">
+                    <div className="font-semibold text-white mb-2">Remix Controls</div>
+                    <div className="flex flex-wrap gap-3 mb-3">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={remixSettings.fasterCuts}
+                          onChange={(event) =>
+                            setRemixSettings((prev) => ({ ...prev, fasterCuts: event.target.checked }))
+                          }
+                        />
+                        Faster cuts
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={remixSettings.moreText}
+                          onChange={(event) =>
+                            setRemixSettings((prev) => ({ ...prev, moreText: event.target.checked }))
+                          }
+                        />
+                        More text
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={remixSettings.characterFocus}
+                          onChange={(event) =>
+                            setRemixSettings((prev) => ({ ...prev, characterFocus: event.target.checked }))
+                          }
+                        />
+                        Character focus
+                      </label>
+                    </div>
+                    <div className="space-y-2">
+                      {video.timelinePlan.beats.map((beat) => (
+                        <div key={beat.id} className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="text-white">{beat.label}</div>
+                            <div className="text-gray-500">{beat.duration}s</div>
+                          </div>
+                          <button
+                            onClick={() => handleRemix(video, beat.id)}
+                            className="rounded-md bg-purple-600 px-3 py-1 text-xs text-white hover:bg-purple-500"
+                          >
+                            Regenerate beat
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => handleRemix(video)}
+                      className="mt-3 w-full rounded-md border border-purple-500 px-3 py-2 text-xs text-purple-200 hover:bg-purple-500/10"
+                    >
+                      Remix full trailer
+                    </button>
+                    {video.parentJobId && (
+                      <div className="mt-2 text-[10px] text-gray-500">
+                        Remix of job {video.parentJobId}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           ))}

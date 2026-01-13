@@ -1,12 +1,13 @@
-import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-import "./globals.css";
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import './globals.css';
+import AppNav from '../components/layout/AppNav';
 
-const inter = Inter({ subsets: ["latin"] });
+const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: "BookTok Trailer Studio",
-  description: "AI-powered book trailer generator",
+  title: 'Trailer DNA',
+  description: 'AI-powered trailer generation studio',
 };
 
 export default function RootLayout({
@@ -16,7 +17,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={inter.className}>{children}</body>
+      <body className={inter.className}>
+        <AppNav />
+        <main className="min-h-screen bg-slate-950 text-slate-100">
+          {children}
+        </main>
+      </body>
     </html>
   );
 }
